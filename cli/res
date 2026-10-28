@@ -1,0 +1,166 @@
+#!/bin/bash
+# res: change the scaled resolution of the built-in display (Apple silicon Macs).
+#
+#   res                    show the presets ('res list' does the same)
+#   res <preset>           use a preset (for example: res more)
+#   res <width>x<height>   use any HiDPI size from 'displaymode list'
+#   res setup [width ...]  make the presets for this Mac. Each width adds a custom size.
+#   res install            add the custom sizes to macOS (asks for your password). Then restart.
+#   res uninstall          remove the custom sizes from macOS (asks for your password). Then restart.
+#
+# Presets: ~/.config/res/presets (edit it to rename or remove presets).
+# Stock sizes: ~/.config/res/stock (the HiDPI sizes that macOS had before 'res install').
+# RES_CONFIG_DIR changes the folder of these two files (for tests).
+set -euo pipefail
+
+DM="$(cd "$(dirname "$0")" && pwd)/displaymode"
+CONF="${RES_CONFIG_DIR:-$HOME/.config/res}"
+PRESETS="$CONF/presets"
+STOCK="$CONF/stock"
+MAX_PIXEL_WIDTH=6144   # HiDPI pixel width limit of base Apple silicon chips (M1 to M5)
+
+load_info() {
+  read -r VENDOR PRODUCT NATIVE DEFAULT <<< "$("$DM" info)"
+  OVERRIDE="/Library/Displays/Contents/Resources/Overrides/DisplayVendorID-$VENDOR/DisplayProductID-$PRODUCT"
+}
+
+# Preset sizes that are not stock sizes.
+custom_sizes() {
+  awk 'NR == FNR { stock[$1]; next } !/^#/ && NF >= 2 && !($2 in stock) { print $2 }' "$STOCK" "$PRESETS"
+}
+
+list() {
+  if [[ ! -f $PRESETS ]]; then
+    echo "No presets yet. Run: res setup"
+    exit 1
+  fi
+  local modes name size note mark
+  # HiDPI sizes on this display, each with a "*" (current) or "-" in front.
+  modes=$("$DM" list | awk -F'\t' '$3 == "HiDPI" { print $1 $2 }')
+  printf "  %-12s %-10s %s\n" COMMAND SIZE NOTE
+  while read -r name size note; do
+    [[ -n $name && $name != \#* ]] || continue
+    mark=" "
+    if grep -qx "\*$size" <<< "$modes"; then
+      mark="*"
+    elif ! grep -qx -- "-$size" <<< "$modes"; then
+      note="not available (run 'res install', then restart)"
+    fi
+    printf "%s %-12s %-10s %s\n" "$mark" "res $name" "$size" "$note"
+  done < "$PRESETS"
+}
+
+setup() {
+  load_info
+  mkdir -p "$CONF"
+  if [[ ! -f $STOCK ]]; then
+    if [[ -e $OVERRIDE ]]; then
+      echo "A display override already exists: $OVERRIDE"
+      echo "It changes the macOS size list, so setup cannot read the stock sizes."
+      echo "Remove it with 'res uninstall', restart the Mac, and run 'res setup' again."
+      exit 1
+    fi
+    "$DM" list | awk -F'\t' '$3 == "HiDPI" { print $2 }' > "$STOCK"
+  fi
+
+  local nw=${NATIVE%x*} nh=${NATIVE#*x} full=() s w h d i n name note
+  # Stock sizes with the full screen shape (the same shape as the native pixels), small to large.
+  while read -r s; do
+    w=${s%x*}; h=${s#*x}
+    d=$(( w * nh - h * nw ))
+    if (( d < 0 )); then d=$(( -d )); fi
+    if (( d * 100 < h * nh )); then full+=("$s"); fi
+  done < <(sort -t x -k1,1n -k2,2n "$STOCK")
+  n=${#full[@]}
+  local more_w=${full[n-1]%x*}
+
+  for w in "$@"; do
+    if ! [[ $w =~ ^[0-9]+$ ]] || (( w * 2 > MAX_PIXEL_WIDTH )) || (( w <= more_w )); then
+      echo "Width $w is not valid. Use a number above $more_w and at most $(( MAX_PIXEL_WIDTH / 2 ))."
+      exit 1
+    fi
+  done
+
+  {
+    echo "# name   size       note   (edit this file to rename or remove presets)"
+    for (( i = 0; i < n; i++ )); do
+      s=${full[i]}; name=${s%x*}; note=""
+      if (( i == 0 )); then name=larger; note="Larger Text"; fi
+      if [[ $s == "$DEFAULT" ]]; then name=default; note=Default; fi
+      if (( i == n - 1 )); then name=more; note="More Space"; fi
+      printf "%-8s %-10s %s\n" "$name" "$s" "$note"
+    done
+    for w in "$@"; do
+      h=$(( w * nh / nw ))
+      printf "%-8s %-10s %s\n" "$w" "${w}x$h" "$(( (more_w * 100 + w / 2) / w ))% of More Space"
+    done
+  } > "$PRESETS"
+
+  echo "Display: vendor $VENDOR, product $PRODUCT, native $NATIVE pixels"
+  echo "Wrote $PRESETS"
+  echo
+  list
+  echo
+  if (( $# > 0 )) && list | grep -q "not available"; then
+    echo "Next: run 'res install', then restart the Mac."
+  elif (( $# > 0 )); then
+    echo "macOS already has all of these sizes. You do not have to install again."
+  else
+    w=$(( (more_w * 100 / 88 + 4) / 8 * 8 )); h=$(( (more_w * 100 / 82 + 4) / 8 * 8 ))
+    echo "To add custom sizes, give their widths. For example: res setup $w $h"
+  fi
+}
+
+install_override() {
+  load_info
+  local customs tmp
+  customs=$(custom_sizes | tr '\n' ' ')
+  if [[ -z ${customs// /} ]]; then
+    echo "No custom sizes in $PRESETS. Run 'res setup <width> ...' first."
+    exit 1
+  fi
+  tmp=$(mktemp)
+  # shellcheck disable=SC2046,SC2086
+  "$DM" override $(cat "$STOCK") $customs > "$tmp"
+  echo "Display: vendor $VENDOR, product $PRODUCT"
+  echo "Custom sizes: $customs"
+  echo "File: $OVERRIDE"
+  sudo /bin/bash -c '
+    set -e
+    if [[ -e $1 ]]; then
+      mv "$1" "$3/$(basename "$1") (old override $(date "+%Y-%m-%d %-I.%M.%S %p"))"
+      echo "Moved the old override to the Trash."
+    fi
+    mkdir -p "$(dirname "$1")"
+    install -o root -g wheel -m 0644 "$2" "$1"' _ "$OVERRIDE" "$tmp" "$HOME/.Trash"
+  rm -f "$tmp"
+  echo "Installed. Restart the Mac, then run 'res list'."
+}
+
+uninstall_override() {
+  load_info
+  sudo /bin/bash -c '
+    if [[ -e $1 ]]; then
+      mv "$1" "$2/$(basename "$1") (removed $(date "+%Y-%m-%d %-I.%M.%S %p"))"
+      echo "Moved the override to the Trash. Restart the Mac to go back to the stock sizes."
+    else
+      echo "No override is installed."
+    fi' _ "$OVERRIDE" "$HOME/.Trash"
+}
+
+case "${1:-}" in
+  list|"")          list ;;
+  setup)            shift; setup "$@" ;;
+  install)          install_override ;;
+  uninstall)        uninstall_override ;;
+  help|-h|--help)   sed -n '2,13p' "$0" | cut -c3- ;;
+  [0-9]*x[0-9]*)    exec "$DM" set "$1" ;;
+  *)
+    size=$(awk -v n="$1" '!/^#/ && $1 == n { print $2; exit }' "$PRESETS" 2>/dev/null || true)
+    if [[ -n $size ]]; then
+      exec "$DM" set "$size"
+    fi
+    echo "Unknown preset: $1"
+    list
+    exit 1 ;;
+esac

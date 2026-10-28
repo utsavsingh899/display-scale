@@ -1,0 +1,6 @@
+build/
+dist/
+bench/powermeter
+bench/screenload
+bench/gpuburn
+.DS_Store
