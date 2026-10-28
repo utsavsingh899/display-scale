@@ -30,6 +30,7 @@ final class SetupModel: ObservableObject {
     let stock: [Size]
     let moreSpace: Size?
     var onClose: () -> Void = {}
+    var onFront: () -> Void = {}
 
     /// The step to show at launch, or nil when the setup is complete.
     static func launchStep() -> Step? {
@@ -164,6 +165,12 @@ final class SetupModel: ObservableObject {
 
     private func run(_ action: () throws -> Void) {
         error = nil
+        defer {
+            // The password prompt belongs to another process. After it closes, macOS can put
+            // another app in front, so bring the setup window back to the front.
+            NSApp.activate(ignoringOtherApps: true)
+            onFront()
+        }
         do {
             try action()
         } catch is Override.Cancelled {

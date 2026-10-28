@@ -155,6 +155,7 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func showSetup(_ step: SetupModel.Step) {
         let model = SetupModel(step: step)
         model.onClose = { [weak self] in self?.setupWindow?.close() }
+        model.onFront = { [weak self] in self?.setupWindow?.makeKeyAndOrderFront(nil) }
         let host = NSHostingController(rootView: SetupView(model: model))
         host.sizingOptions = [.preferredContentSize]
         let window = setupWindow ?? NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)

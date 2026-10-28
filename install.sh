@@ -33,13 +33,20 @@ echo "Installed res and displaymode in $BIN"
 
 # The app. An older copy goes to the Trash.
 osascript -e 'quit app "Display Scale"' 2>/dev/null || true
+# Wait up to 5 seconds for the old app to quit. Before that, macOS cannot open the new one.
+for _ in {1..10}; do
+  pgrep -qf "Display Scale.app/Contents/MacOS/DisplayScale" || break
+  sleep 0.5
+done
 if [[ -d $APP ]]; then
   mv "$APP" "$HOME/.Trash/Display Scale $(date '+%Y-%m-%d %-I.%M.%S %p').app"
 fi
 ditto "$HERE/Display Scale.app" "$APP"
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
-open "$APP"
 echo "Installed $APP"
+if ! open "$APP"; then
+  echo "macOS did not open the app. Open Display Scale from the Applications folder."
+fi
 echo
 echo "Display Scale is open. Its icon (a small display) is in the menu bar."
 echo "On the first start, its setup window takes you through the custom sizes."
