@@ -1,4 +1,4 @@
-// The menu bar item: a slider with one stop for each preset, and the setup commands.
+// The menu bar item: a slider with one stop for each preset, the Dark Mode item, and the setup commands.
 // When you release the slider, the menu closes and the screen changes to that size.
 
 import AppKit
@@ -12,6 +12,41 @@ final class ReleaseSliderCell: NSSliderCell {
     override func stopTracking(last lastPoint: NSPoint, current stopPoint: NSPoint, in controlView: NSView, mouseIsUp flag: Bool) {
         super.stopTracking(last: lastPoint, current: stopPoint, in: controlView, mouseIsUp: flag)
         if flag { onRelease?() }
+    }
+}
+
+/// Larger, darker dots on top of the tick marks of a slider. The standard tick marks are small and very light.
+/// This view goes above the slider and has the same frame. It does not get mouse events.
+/// The new slider of macOS 26 and later does not call drawTickMarks, and rectOfTickMark gives the old positions.
+/// Thus this view puts each dot below the center of the knob at that stop, where macOS draws its tick mark.
+/// The positions were measured on macOS 27. Older macOS versions keep the standard tick marks.
+final class TickDotsView: NSView {
+    weak var slider: NSSlider?
+
+    init(slider: NSSlider) {
+        self.slider = slider
+        super.init(frame: slider.frame)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let slider, let cell = slider.cell as? NSSliderCell, slider.numberOfTickMarks > 1 else { return }
+        (slider.isEnabled ? NSColor.secondaryLabelColor : NSColor.tertiaryLabelColor).setFill()
+        let diameter: CGFloat = 4
+        let gap: CGFloat = 4  // From the bottom of the track to the center of a dot.
+        let bar = cell.barRect(flipped: slider.isFlipped)
+        let knob = cell.knobRect(flipped: slider.isFlipped).width
+        let step = (bar.width - knob) / CGFloat(slider.numberOfTickMarks - 1)
+        let y = slider.isFlipped ? bar.maxY + gap : bar.minY - gap
+        // The knob covers the dot at its stop, as with the standard tick marks.
+        let knobStop = Int(slider.doubleValue.rounded())
+        for index in 0..<slider.numberOfTickMarks where index != knobStop {
+            let center = convert(NSPoint(x: bar.minX + knob / 2 + step * CGFloat(index), y: y), from: slider)
+            NSBezierPath(ovalIn: NSRect(x: center.x - diameter / 2, y: center.y - diameter / 2, width: diameter, height: diameter)).fill()
+        }
     }
 }
 
@@ -32,12 +67,15 @@ func currentIndex(_ presets: [Preset], _ display: CGDirectDisplayID) -> Int? {
 }
 
 final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    static let menuWidth: CGFloat = 300
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let menu = NSMenu()
     let sliderItem = NSMenuItem()
+    let darkModeItem = NSMenuItem()
     let removeItem = NSMenuItem(title: "Remove Custom Sizes…", action: #selector(removeCustomSizes), keyEquivalent: "")
     let loginItem = NSMenuItem(title: "Open at Login", action: #selector(toggleLogin), keyEquivalent: "")
     var slider = NSSlider()
+    var tickDots: TickDotsView?
     var valueLabel = NSTextField(labelWithString: "")
     var presets: [Preset] = []
     var appliedIndex: Int?
@@ -51,6 +89,10 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for item in [setupItem, removeItem, loginItem] { item.target = self }
         menu.addItem(sliderItem)
         menu.addItem(.separator())
+        if Appearance.isAvailable {
+            menu.addItem(darkModeItem)
+            menu.addItem(.separator())
+        }
         menu.addItem(setupItem)
         menu.addItem(removeItem)
         menu.addItem(.separator())
@@ -66,7 +108,7 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Slider
 
     func makeSliderView() -> NSView {
-        let width: CGFloat = 300
+        let width = Self.menuWidth
         let view = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 92))
 
         let title = NSTextField(labelWithString: "Display Size")
@@ -85,6 +127,12 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         slider.tickMarkPosition = .below
         slider.frame = NSRect(x: 14, y: 36, width: width - 28, height: 26)
         view.addSubview(slider)
+        if #available(macOS 26, *) {
+            let dots = TickDotsView(slider: slider)
+            view.addSubview(dots)
+            tickDots = dots
+        }
+        
 
         let small = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         let left = NSTextField(labelWithString: "Larger text")
@@ -109,6 +157,7 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         // A new slider each time, so no state from the last drag or display change stays.
         sliderItem.view = makeSliderView()
+        darkModeItem.view = DarkModeView(width: Self.menuWidth)
         let display = Display.builtin
         presets = display.map(sliderPresets) ?? []
         appliedIndex = display.flatMap { currentIndex(presets, $0) }
@@ -131,7 +180,10 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc func sliderMoved() { updateLabel() }
+    @objc func sliderMoved() {
+        updateLabel()
+        tickDots?.needsDisplay = true
+    }
 
     func sliderReleased() {
         let index = Int(slider.doubleValue.rounded())
