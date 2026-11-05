@@ -8,6 +8,7 @@ On a laptop, macOS stops at **More Space**. For example, a 14-inch MacBook Pro s
 
 - **Menu bar slider:** Click the display icon and drag the slider. When you release it, the screen changes to that size.
 - **Guided setup:** On the first start, a setup window suggests two custom sizes for your laptop and adds them for you.
+- **Dark Mode:** Click **Dark Mode** in the same menu to turn Dark Mode on or off, as in the Display menu of Control Center.
 - **Command line tool:** `res` does the same work in Terminal, for example `res more` or `res 2200`.
 
 > [!NOTE]
@@ -137,6 +138,7 @@ The custom sizes are also in System Settings. Open **System Settings > Displays*
 | Item | What it does |
 |---|---|
 | Display Size slider | Changes the size of the built-in display. |
+| Dark Mode | Turns Dark Mode on or off for all apps. The accent color fills the circle when Dark Mode is on. The menu stays open after the click. |
 | Set Up Custom Sizes… | Opens the setup window, so you can change your custom sizes. A change needs your password and a restart. |
 | Remove Custom Sizes… | Moves the override file to the Trash. After a restart, only the standard sizes are available. |
 | Open at Login | Starts Display Scale each time you log in. |
@@ -276,6 +278,8 @@ The file has a `scale-resolutions` array. Each size gets two entries at 2× its 
 BetterDisplay uses the same format. The file also includes the standard sizes. Thus Default and More Space stay available if macOS replaces the list instead of adding to it.
 
 To change the size, Display Scale and `displaymode` use `CGConfigureDisplayWithDisplayMode`, a public CoreGraphics function, with a permanent change.
+
+macOS has no public function that changes Dark Mode. Display Scale uses two private SkyLight functions: `SLSGetAppearanceThemeLegacy` and `SLSSetAppearanceThemeLegacy`. A future macOS can remove them. If they are not there, the menu does not show the Dark Mode item. All other items continue to work.
 
 ## Build from source
 
